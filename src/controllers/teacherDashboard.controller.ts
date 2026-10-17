@@ -16,7 +16,7 @@ export const getTeacherDashboard = asyncHandler(async (req, res) => {
   const courses: any[] = await Course.find({ instructor: me }).select("studentsCount ratingAvg ratingCount createdAt")
   const courseIds = courses.map((c) => c._id)
 
-  // শেষ ৭ মাস (বর্তমান মাস সহ), UTC ধরে
+  
   const trendStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 6, 1))
 
   const [pendingSubmissions, submissions, reviews, trendRaw, newStudents, unreadNotifications, unreadMessages] =

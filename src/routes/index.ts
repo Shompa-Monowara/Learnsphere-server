@@ -23,6 +23,7 @@ import * as wishlist from "../controllers/wishlist.controller"
 import { getStudentDashboard } from "../controllers/studentDashboard.controller"
 import * as portal from "../controllers/studentPortal.controller"
 import { getTeacherDashboard } from "../controllers/teacherDashboard.controller"
+import teacherRoutes from "./teacher.routes"
 
 const router = Router()
 const teacher = [protect, authorize("teacher", "admin")]
@@ -128,6 +129,9 @@ router.get("/dashboard/student", student, getStudentDashboard)
 router.get("/dashboard/student/progress", student, portal.getProgress)
 router.get("/dashboard/teacher", teacher, getTeacherDashboard)
 router.get("/dashboard/teacher/earnings", teacher, dashboard.teacherEarnings)
+
+/* Teacher portal (reviews page, earnings, payouts) */
+router.use("/teacher", teacherRoutes)
 
 /* Admin */
 router.get("/admin/stats", adminOnly, admin.getStats)
