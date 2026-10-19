@@ -17,14 +17,62 @@ const recalc = async (courseId: Types.ObjectId) => {
 }
 
 export const getCourseReviews = asyncHandler(async (req, res) => {
-  const reviews = await Review.find({ course: req.params.courseId })
+  const docs = await Review.find({ course: req.params.courseId })
+    .select("+helpfulBy")
     .populate("student", "name avatar")
     .sort("-createdAt")
   const breakdown = [5, 4, 3, 2, 1].map((star) => ({
     star,
-    count: reviews.filter((r) => r.rating === star).length,
+    count: docs.filter((r) => r.rating === star).length,
   }))
+
+  /* helpfulBy (student id gulo) client e pathai na, shudhu "ami mark korechhi kina" pathai */
+  const me = req.user ? String(req.user._id) : ""
+  const reviews = docs.map((r) => {
+    const { helpfulBy, ...rest } = r.toObject()
+    return {
+      ...rest,
+      helpful: r.helpful ?? 0,
+      markedByMe: !!me && helpfulBy.some((u) => String(u) === me),
+    }
+  })
   res.json({ reviews, breakdown })
+})
+
+/* POST /reviews/:id/helpful : toggle (mark / unmark), ek student ek review te ek bar-i */
+export const toggleHelpful = asyncHandler(async (req, res) => {
+  const id = String(req.params.id)
+  if (!Types.ObjectId.isValid(id)) throw new ApiError(400, "Invalid review")
+
+  const me = req.user!._id
+  const review = await Review.findById(id).select("student +helpfulBy")
+  if (!review) throw new ApiError(404, "Review not found")
+  if (String(review.student) === String(me)) {
+    throw new ApiError(400, "You cannot mark your own review as helpful")
+  }
+
+  const already = review.helpfulBy.some((u) => String(u) === String(me))
+  /* Filter ta atomic: double click / dui tab e dewa request e count duplicate hoy na */
+  const updated = already
+    ? await Review.findOneAndUpdate(
+        { _id: id, helpfulBy: me },
+        { $pull: { helpfulBy: me }, $inc: { helpful: -1 } },
+        { new: true }
+      ).select("helpful +helpfulBy")
+    : await Review.findOneAndUpdate(
+        { _id: id, helpfulBy: { $ne: me } },
+        { $addToSet: { helpfulBy: me }, $inc: { helpful: 1 } },
+        { new: true }
+      ).select("helpful +helpfulBy")
+
+  /* updated null mane onno ekta request age-i ei kaj ta kore diyeche, tai current obostha-i pathai */
+  const current = updated ?? (await Review.findById(id).select("helpful +helpfulBy"))
+  if (!current) throw new ApiError(404, "Review not found")
+
+  res.json({
+    helpful: current.helpful ?? 0,
+    markedByMe: current.helpfulBy.some((u) => String(u) === String(me)),
+  })
 })
 
 export const upsertReview = asyncHandler(async (req, res) => {

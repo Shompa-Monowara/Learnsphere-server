@@ -3,7 +3,13 @@ import rateLimit from "express-rate-limit"
 import { authorize, optionalAuth, protect } from "../middlewares/auth"
 import { upload } from "../middlewares/upload"
 import { validate } from "../middlewares/validate"
-import { loginSchema, registerSchema } from "../validations/auth.validation"
+import {
+  completeRegisterSchema,
+  loginSchema,
+  registerSchema,
+  resendOtpSchema,
+} from "../validations/auth.validation"
+import { blockDirectRegister } from "../middlewares/otpGate"
 
 import * as admin from "../controllers/admin.controller"
 import * as assignment from "../controllers/assignment.controller"
@@ -16,7 +22,9 @@ import * as enrollment from "../controllers/enrollment.controller"
 import * as instructor from "../controllers/instructor.controller"
 import * as message from "../controllers/message.controller"
 import * as notification from "../controllers/notification.controller"
+import * as oauth from "../controllers/oauth.controller"
 import * as quiz from "../controllers/quiz.controller"
+import * as registerOtp from "../controllers/registerOtp.controller"
 import * as review from "../controllers/review.controller"
 import * as uploadCtrl from "../controllers/upload.controller"
 import * as wishlist from "../controllers/wishlist.controller"
@@ -37,13 +45,23 @@ const authLimiter = rateLimit({
 })
 
 /* Auth */
-router.post("/auth/register", authLimiter, validate(registerSchema), auth.register)
+router.post("/auth/register", authLimiter, blockDirectRegister, validate(registerSchema), auth.register)
+router.post("/auth/register/request-otp", authLimiter, validate(registerSchema), registerOtp.requestOtp)
+router.post("/auth/register/resend-otp", authLimiter, validate(resendOtpSchema), registerOtp.resendOtp)
+router.post("/auth/register/complete", authLimiter, validate(completeRegisterSchema), registerOtp.complete)
 router.post("/auth/login", authLimiter, validate(loginSchema), auth.login)
 router.post("/auth/forgot-password", authLimiter, auth.forgotPassword)
 router.post("/auth/reset-password/:token", auth.resetPassword)
 router.get("/auth/me", protect, auth.getMe)
 router.put("/auth/me", protect, auth.updateMe)
 router.put("/auth/password", protect, auth.changePassword)
+
+/* OAuth Routes */
+router.get("/auth/google", authLimiter, oauth.googleStart)
+router.get("/auth/google/callback", authLimiter, oauth.googleCallback)
+router.get("/auth/github", authLimiter, oauth.githubStart)
+router.get("/auth/github/callback", authLimiter, oauth.githubCallback)
+router.post("/auth/oauth/exchange", authLimiter, oauth.exchangeCode)
 
 /* Categories */
 router.get("/categories", category.getCategories)
@@ -66,10 +84,11 @@ router.patch("/courses/:id/submit", teacher, course.submitForReview)
 router.delete("/courses/:id", teacher, course.deleteCourse)
 
 /* Reviews */
-router.get("/courses/:courseId/reviews", review.getCourseReviews)
+router.get("/courses/:courseId/reviews", optionalAuth, review.getCourseReviews)
 router.post("/courses/:courseId/reviews", student, review.upsertReview)
 router.get("/reviews/mine", teacher, review.getTeacherReviews)
 router.patch("/reviews/:id/reply", teacher, review.replyToReview)
+router.post("/reviews/:id/helpful", student, review.toggleHelpful)
 
 /* Enrollments and learning */
 router.post("/enrollments/:courseId", student, enrollment.enroll)

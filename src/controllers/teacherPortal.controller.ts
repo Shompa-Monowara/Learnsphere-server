@@ -65,6 +65,7 @@ export const getReviewsPage = asyncHandler(async (req, res) => {
         rating: r.rating,
         comment: r.comment || "",
         reply: r.reply || "",
+        helpful: r.helpful || 0,
         createdAt: r.createdAt,
       })),
   })

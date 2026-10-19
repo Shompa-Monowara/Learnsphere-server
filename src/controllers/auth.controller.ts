@@ -7,10 +7,10 @@ import User from "../models/User"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
 
-const sign = (id: unknown): string =>
+export const sign = (id: unknown): string =>
   jwt.sign({ id }, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN as SignOptions["expiresIn"] })
 
-const respond = (res: Response, status: number, user: InstanceType<typeof User>) => {
+export const respond = (res: Response, status: number, user: InstanceType<typeof User>) => {
   const { password, resetToken, resetExpires, ...safe } = user.toObject()
   res.status(status).json({ token: sign(user._id), user: safe })
 }

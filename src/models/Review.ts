@@ -7,6 +7,9 @@ const reviewSchema = new Schema(
     rating: { type: Number, required: true, min: 1, max: 5 },
     comment: { type: String, default: "" },
     reply: { type: String, default: "" },
+    helpful: { type: Number, default: 0, min: 0 },
+    /* kon kon student helpful mark korechhe: ek jon ek bar-i. Default e query te ashe na */
+    helpfulBy: { type: [{ type: Schema.Types.ObjectId, ref: "User" }], default: [], select: false },
   },
   { timestamps: true }
 )
