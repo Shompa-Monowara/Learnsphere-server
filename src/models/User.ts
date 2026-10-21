@@ -12,6 +12,7 @@ export interface IUser {
   role: Role
   avatar: string
   headline: string
+  website: string
   bio: string
   isBlocked: boolean
   wishlist: Types.ObjectId[]
@@ -33,6 +34,7 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
     role: { type: String, enum: ROLES, default: "student" },
     avatar: { type: String, default: "" },
     headline: { type: String, default: "" },
+    website: { type: String, default: "", trim: true, maxlength: 200 },
     bio: { type: String, default: "" },
     isBlocked: { type: Boolean, default: false },
     wishlist: [{ type: Schema.Types.ObjectId, ref: "Course" }],

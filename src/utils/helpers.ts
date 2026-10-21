@@ -2,6 +2,7 @@ import crypto from "crypto"
 import Certificate from "../models/Certificate"
 import Enrollment from "../models/Enrollment"
 import Notification from "../models/Notification"
+import User from "../models/User"
 import ApiError from "./ApiError"
 
 export const slugify = (text: string): string =>
@@ -15,6 +16,17 @@ export const pick = (obj: Record<string, any>, keys: string[]): Record<string, a
 
 export const notify = (user: any, title: string, message: string, link = "") =>
   Notification.create({ user, title, message, link }).catch(() => null)
+
+/* Shob admin ke ekshathe notification pathay */
+export const notifyAdmins = async (title: string, message: string, link = "") => {
+  try {
+    const admins = await User.find({ role: "admin" }).select("_id").lean()
+    if (!admins.length) return
+    await Notification.insertMany(admins.map((a) => ({ user: a._id, title, message, link })))
+  } catch {
+    /* notification fail holeo main kaj thambe na */
+  }
+}
 
 export const isOwnerOrAdmin = (course: { instructor: any }, user: { _id: any; role: string }): boolean =>
   user.role === "admin" ||

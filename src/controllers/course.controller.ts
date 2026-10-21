@@ -4,7 +4,7 @@ import Enrollment from "../models/Enrollment"
 import Quiz from "../models/Quiz"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
-import { escapeRegex, isOwnerOrAdmin, pick } from "../utils/helpers"
+import { escapeRegex, isOwnerOrAdmin, notifyAdmins, pick } from "../utils/helpers"
 
 const FIELDS = [
   "title", "shortDescription", "description", "category", "level", "language",
@@ -112,6 +112,7 @@ export const submitForReview = asyncHandler(async (req, res) => {
   course.status = "pending"
   course.rejectionReason = undefined
   await course.save()
+  await notifyAdmins("Course awaiting review", `"${course.title}" was submitted for moderation.`, "/admin/courses")
   res.json({ course })
 })
 

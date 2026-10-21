@@ -1,7 +1,7 @@
 import { Router } from "express"
 import rateLimit from "express-rate-limit"
 import { authorize, optionalAuth, protect } from "../middlewares/auth"
-import { upload } from "../middlewares/upload"
+import { chatUpload, upload } from "../middlewares/upload"
 import { validate } from "../middlewares/validate"
 import {
   completeRegisterSchema,
@@ -12,6 +12,8 @@ import {
 import { blockDirectRegister } from "../middlewares/otpGate"
 
 import * as admin from "../controllers/admin.controller"
+import { getPayments } from "../controllers/adminPayments.controller"
+import { getReports } from "../controllers/adminReports.controller"
 import * as assignment from "../controllers/assignment.controller"
 import * as auth from "../controllers/auth.controller"
 import * as category from "../controllers/category.controller"
@@ -32,6 +34,13 @@ import { getStudentDashboard } from "../controllers/studentDashboard.controller"
 import * as portal from "../controllers/studentPortal.controller"
 import { getTeacherDashboard } from "../controllers/teacherDashboard.controller"
 import teacherRoutes from "./teacher.routes"
+
+import {
+  getPublicAppearance,
+  getSiteSettings,
+  updateSiteSettings,
+} from "../controllers/siteSettings.controller"
+import { getPricing } from "../controllers/pricing.controller"
 
 const router = Router()
 const teacher = [protect, authorize("teacher", "admin")]
@@ -62,6 +71,12 @@ router.get("/auth/google/callback", authLimiter, oauth.googleCallback)
 router.get("/auth/github", authLimiter, oauth.githubStart)
 router.get("/auth/github/callback", authLimiter, oauth.githubCallback)
 router.post("/auth/oauth/exchange", authLimiter, oauth.exchangeCode)
+
+/* Site settings (public: login chhara-o pawa jabe, shudhu appearance) */
+router.get("/site-settings/public", getPublicAppearance)
+
+/* Pricing (public) */
+router.get("/pricing", getPricing)
 
 /* Categories */
 router.get("/categories", category.getCategories)
@@ -138,7 +153,7 @@ router.patch("/notifications/:id/read", protect, notification.markRead)
 /* Messages */
 router.get("/messages/conversations", protect, message.getConversations)
 router.get("/messages/:userId", protect, message.getThread)
-router.post("/messages/:userId", protect, message.sendMessage)
+router.post("/messages/:userId", protect, chatUpload.single("file"), message.sendMessage)
 
 /* Uploads */
 router.post("/upload", protect, upload.single("file"), uploadCtrl.uploadFile)
@@ -157,8 +172,14 @@ router.get("/admin/stats", adminOnly, admin.getStats)
 router.get("/admin/users", adminOnly, admin.getUsers)
 router.patch("/admin/users/:id/block", adminOnly, admin.toggleBlock)
 router.patch("/admin/users/:id/role", adminOnly, admin.changeRole)
+router.delete("/admin/users/:id", adminOnly, admin.deleteUser)
+router.get("/admin/categories", adminOnly, category.getAdminCategories)
 router.get("/admin/courses", adminOnly, admin.getAdminCourses)
 router.patch("/admin/courses/:id/moderate", adminOnly, admin.moderateCourse)
 router.get("/admin/transactions", adminOnly, admin.getTransactions)
+router.get("/admin/payments", adminOnly, getPayments)
+router.get("/admin/reports", adminOnly, getReports)
+router.get("/admin/site-settings", adminOnly, getSiteSettings)
+router.put("/admin/site-settings", adminOnly, updateSiteSettings)
 
 export default router

@@ -18,6 +18,27 @@ export const getCategories = asyncHandler(async (_req, res) => {
   })
 })
 
+/* Admin er jonno: sob course (draft shoho) ar kotojon teacher ta gune dei */
+export const getAdminCategories = asyncHandler(async (_req, res) => {
+  const [categories, stats] = await Promise.all([
+    Category.find().sort("name").lean(),
+    Course.aggregate([
+      { $match: { category: { $ne: null } } },
+      { $group: { _id: "$category", courses: { $sum: 1 }, teachers: { $addToSet: "$instructor" } } },
+    ]),
+  ])
+  const map = new Map<string, { courses: number; teachers: number }>(
+    stats.map((s) => [String(s._id), { courses: s.courses, teachers: s.teachers.length }])
+  )
+  res.json({
+    categories: categories.map((c) => ({
+      ...c,
+      coursesCount: map.get(String(c._id))?.courses ?? 0,
+      teachersCount: map.get(String(c._id))?.teachers ?? 0,
+    })),
+  })
+})
+
 export const createCategory = asyncHandler(async (req, res) => {
   const { name, icon } = req.body
   if (!name) throw new ApiError(400, "Category name is required")

@@ -37,10 +37,11 @@ export const getMe = asyncHandler(async (req, res) => {
 
 export const updateMe = asyncHandler(async (req, res) => {
   const user = req.user!
-  const { name, bio, headline, avatar } = req.body
+  const { name, bio, headline, website, avatar } = req.body
   if (name !== undefined) user.name = name
   if (bio !== undefined) user.bio = bio
   if (headline !== undefined) user.headline = headline
+  if (website !== undefined) user.website = String(website).trim().slice(0, 200)
   if (avatar !== undefined) user.avatar = avatar
   await user.save()
   res.json({ user })

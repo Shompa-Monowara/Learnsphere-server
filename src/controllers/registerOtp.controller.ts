@@ -3,6 +3,7 @@ import PendingVerification from "../models/PendingVerification"
 import User from "../models/User"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
+import { notifyAdmins } from "../utils/helpers"
 import { sendMail } from "../utils/mailer"
 import {
   MAX_SENDS_PER_WINDOW,
@@ -131,6 +132,9 @@ export const complete = asyncHandler(async (req, res) => {
   try {
     /* Existing pre("save") hook ei password hash kore, tai plain password-i dewa */
     const user = await User.create({ name, email, password, role: role === "teacher" ? "teacher" : "student" })
+    if (user.role === "teacher") {
+      await notifyAdmins("New teacher joined", `${user.name} registered as a teacher.`, "/admin/users")
+    }
     respond(res, 201, user)
   } catch (err) {
     if (isDuplicateKey(err)) throw new ApiError(409, "Email is already registered")

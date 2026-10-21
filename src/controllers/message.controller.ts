@@ -5,6 +5,12 @@ import Message from "../models/Message"
 import User from "../models/User"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
+import { CHAT_MIME_TYPES } from "../middlewares/upload"
+import { uploadBuffer } from "./upload.controller"
+
+/* Conversation list e last message preview: text na thakle attachment er naam */
+const previewOf = (m: any): string =>
+  m?.text || (m?.attachment ? (m.attachment.kind === "image" ? "📷 Photo" : `📄 ${m.attachment.name}`) : "")
 
 interface Contact {
   _id: string
@@ -84,7 +90,7 @@ export const getConversations = asyncHandler(async (req, res) => {
     .map((c) => ({
       user: { _id: c._id, name: c.name, avatar: c.avatar, role: c.role },
       subtitle: c.subtitle,
-      lastMessage: last.get(c._id)?.text || "",
+      lastMessage: previewOf(last.get(c._id)),
       lastAt: last.get(c._id)?.createdAt || null,
       unread: unread.get(c._id) || 0,
     }))
@@ -121,10 +127,24 @@ export const sendMessage = asyncHandler(async (req, res) => {
   if (other === String(me._id)) throw new ApiError(400, "You cannot message yourself")
 
   const text = String(req.body.text || "").trim()
-  if (!text) throw new ApiError(400, "Message cannot be empty")
   if (text.length > 2000) throw new ApiError(400, "Message is too long")
+  if (!text && !req.file) throw new ApiError(400, "Message cannot be empty")
   if (!(await User.exists({ _id: other }))) throw new ApiError(404, "User not found")
 
-  const message = await Message.create({ sender: me._id, receiver: other, text })
+  let attachment: { url: string; name: string; kind: "image" | "pdf"; size: number } | undefined
+  if (req.file) {
+    const kind = CHAT_MIME_TYPES[req.file.mimetype]
+    if (!kind) throw new ApiError(400, "Only images and PDF files are allowed")
+    const result = await uploadBuffer(req.file.buffer, "chat")
+    attachment = {
+      url: result.secure_url,
+      /* multer filename latin1 e pore, tai utf8 e convert (Bangla naam er jonno) */
+      name: Buffer.from(req.file.originalname, "latin1").toString("utf8").slice(0, 120),
+      kind,
+      size: req.file.size,
+    }
+  }
+
+  const message = await Message.create({ sender: me._id, receiver: other, text, attachment })
   res.status(201).json({ message })
 })
