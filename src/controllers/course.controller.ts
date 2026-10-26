@@ -4,7 +4,7 @@ import Enrollment from "../models/Enrollment"
 import Quiz from "../models/Quiz"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
-import { escapeRegex, isOwnerOrAdmin, notifyAdmins, pick } from "../utils/helpers"
+import { countProgress, escapeRegex, isOwnerOrAdmin, issueCertificate, notifyAdmins, pick } from "../utils/helpers"
 
 const FIELDS = [
   "title", "shortDescription", "description", "category", "level", "language",
@@ -101,6 +101,22 @@ export const updateCurriculum = asyncHandler(async (req, res) => {
   if (!Array.isArray(req.body.sections)) throw new ApiError(400, "sections must be an array")
   course.set("sections", req.body.sections)
   await course.save()
+
+  // lesson delete/add hole enrolled student der progress abar hisab kore nao
+  const enrollments = await Enrollment.find({ course: course._id })
+  for (const e of enrollments) {
+    const { ids, progress } = countProgress(course, e.completedLessons)
+    const valid = e.completedLessons.filter((c) => ids.has(String(c.lesson)))
+    if (valid.length === e.completedLessons.length && progress === e.progress) continue
+    e.set("completedLessons", valid)
+    e.progress = progress
+    if (progress >= 100 && !e.completedAt) {
+      e.completedAt = new Date()
+      await issueCertificate(e.student, course)
+    }
+    await e.save()
+  }
+
   res.json({ course })
 })
 

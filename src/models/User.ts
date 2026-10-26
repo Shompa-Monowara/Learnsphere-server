@@ -18,6 +18,7 @@ export interface IUser {
   wishlist: Types.ObjectId[]
   resetToken?: string
   resetExpires?: Date
+  passwordChangedAt?: Date
 }
 
 export interface IUserMethods {
@@ -40,6 +41,8 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
     wishlist: [{ type: Schema.Types.ObjectId, ref: "Course" }],
     resetToken: { type: String, select: false },
     resetExpires: { type: Date, select: false },
+    /* Password reset hole set hoy. Er age issue howa shob JWT invalid */
+    passwordChangedAt: { type: Date },
   },
   { timestamps: true }
 )

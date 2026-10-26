@@ -19,3 +19,8 @@ export const completeRegisterSchema = registerSchema.extend({
 export const resendOtpSchema = z.object({
   email: z.string().trim().toLowerCase().email("Enter a valid email address"),
 })
+
+export const verifyLoginOtpSchema = z.object({
+  email: z.string().trim().toLowerCase().email("Enter a valid email address"),
+  otp: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code"),
+})

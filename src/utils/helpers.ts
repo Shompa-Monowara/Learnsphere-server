@@ -38,6 +38,14 @@ export async function ensureEnrolled(studentId: any, courseId: any) {
   return enrollment
 }
 
+/** course-e ekhon je lesson gulo ache shudhu sheigulo gune progress ber kore */
+export function countProgress(course: { sections: any[] }, completed: { lesson: any }[]) {
+  const ids = new Set<string>(course.sections.flatMap((s: any) => s.lessons.map((l: any) => String(l._id))))
+  const done = completed.filter((c) => ids.has(String(c.lesson))).length
+  const progress = ids.size ? Math.min(100, Math.round((done / ids.size) * 100)) : 0
+  return { ids, done, total: ids.size, progress }
+}
+
 export async function issueCertificate(studentId: any, course: { _id: any; title: string }) {
   const existing = await Certificate.findOne({ student: studentId, course: course._id })
   if (existing) return existing

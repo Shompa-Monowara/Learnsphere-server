@@ -1,9 +1,10 @@
 import Course from "../models/Course"
 import Quiz, { FEEDBACK_TIMINGS } from "../models/Quiz"
 import QuizAttempt from "../models/QuizAttempt"
+import QuizStart from "../models/QuizStart"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
-import { ensureEnrolled, isOwnerOrAdmin, pick } from "../utils/helpers"
+import { ensureEnrolled, isOwnerOrAdmin, notify, pick } from "../utils/helpers"
 
 const loadOwnedCourse = async (courseId: unknown, user: { _id: unknown; role: string }) => {
   const course = await Course.findById(courseId)
@@ -12,7 +13,7 @@ const loadOwnedCourse = async (courseId: unknown, user: { _id: unknown; role: st
   return course
 }
 
-/** student-দের কাছ থেকে উত্তর ও নমুনা উত্তর লুকায় */
+/** student hide*/
 const hideAnswers = (quiz: any) => {
   const data = quiz.toObject()
   data.questions = data.questions.map(({ correctIndex, explanation, sampleAnswer, ...q }: any) => q)
@@ -21,7 +22,7 @@ const hideAnswers = (quiz: any) => {
 
 const FIELDS = ["title", "duration", "passingScore", "questions", "isPublished", "feedbackTiming"]
 
-/** প্রশ্নগুলো যাচাই করে পরিষ্কার আকারে ফেরত দেয় */
+/** question check */
 const cleanQuestions = (raw: unknown) => {
   if (!Array.isArray(raw) || raw.length === 0) throw new ApiError(400, "Add at least one question")
 
@@ -100,7 +101,7 @@ export const deleteQuiz = asyncHandler(async (req, res) => {
   const quiz = await Quiz.findById(req.params.id)
   if (!quiz) throw new ApiError(404, "Quiz not found")
   await loadOwnedCourse(quiz.course, req.user!)
-  await Promise.all([quiz.deleteOne(), QuizAttempt.deleteMany({ quiz: quiz._id })])
+  await Promise.all([quiz.deleteOne(), QuizAttempt.deleteMany({ quiz: quiz._id }), QuizStart.deleteMany({ quiz: quiz._id })])
   res.json({ message: "Quiz deleted" })
 })
 
@@ -116,10 +117,39 @@ interface ReviewRow {
   marks: number
 }
 
+/** network lag er jonno extra somoy */
+const GRACE_SECONDS = 30
+
+export const startQuiz = asyncHandler(async (req, res) => {
+  const quiz = await Quiz.findById(req.params.id)
+  if (!quiz || quiz.isPublished === false) throw new ApiError(404, "Quiz not found")
+  await ensureEnrolled(req.user!._id, quiz.course)
+
+  const limit = (quiz.duration ?? 0) * 60
+  const filter = { quiz: quiz._id, student: req.user!._id }
+  let session = await QuizStart.findOne(filter)
+  const expired = !!session && limit > 0 && Date.now() > session.startedAt.getTime() + (limit + GRACE_SECONDS) * 1000
+
+  if (!session || expired) {
+    session = await QuizStart.findOneAndUpdate(filter, { startedAt: new Date() }, { upsert: true, new: true })
+  }
+
+  const elapsed = Math.floor((Date.now() - session!.startedAt.getTime()) / 1000)
+  res.json({ remaining: limit > 0 ? Math.max(0, limit - elapsed) : null })
+})
+
 export const attemptQuiz = asyncHandler(async (req, res) => {
   const quiz = await Quiz.findById(req.params.id)
   if (!quiz || quiz.isPublished === false) throw new ApiError(404, "Quiz not found")
   await ensureEnrolled(req.user!._id, quiz.course)
+
+  const session = await QuizStart.findOne({ quiz: quiz._id, student: req.user!._id })
+  if (!session) throw new ApiError(400, "Start the quiz before submitting")
+  const limit = (quiz.duration ?? 0) * 60
+  if (limit > 0 && Date.now() > session.startedAt.getTime() + (limit + GRACE_SECONDS) * 1000) {
+    await session.deleteOne()
+    throw new ApiError(400, "Time is up. Please start the quiz again.")
+  }
 
   const answers: unknown[] = Array.isArray(req.body.answers) ? req.body.answers : []
   let mcqScore = 0
@@ -133,7 +163,7 @@ export const attemptQuiz = asyncHandler(async (req, res) => {
     if (q.type === "written") {
       const raw = answers[i]
       const answer = typeof raw === "string" ? raw.trim().slice(0, 5000) : ""
-      
+
       written.push({ index: i, answer, marks, awarded: answer ? null : 0, feedback: "" })
       return {
         type: "written",
@@ -184,6 +214,7 @@ export const attemptQuiz = asyncHandler(async (req, res) => {
     percent,
     passed,
   })
+  await session.deleteOne()
 
   const timing = quiz.feedbackTiming ?? "immediate"
   const reveal = timing === "never" ? false : timing === "after_pass" ? passed : true
@@ -217,4 +248,83 @@ export const getAllMyAttempts = asyncHandler(async (req, res) => {
     .populate("course", "title")
     .sort("-createdAt")
   res.json({ attempts })
+})
+
+/* Teacher: ekta quiz er shob attempt (written answer grade korar jonno) */
+export const getQuizAttempts = asyncHandler(async (req, res) => {
+  const quiz = await Quiz.findById(req.params.id)
+  if (!quiz) throw new ApiError(404, "Quiz not found")
+  await loadOwnedCourse(quiz.course, req.user!)
+
+  const attempts = await QuizAttempt.find({ quiz: quiz._id })
+    .populate("student", "name email avatar")
+    .sort("-createdAt")
+
+  res.json({
+    quiz: {
+      _id: quiz._id,
+      title: quiz.title,
+      passingScore: quiz.passingScore,
+      questions: quiz.questions.map((q) => ({
+        type: q.type,
+        text: q.text,
+        marks: q.marks ?? 1,
+        sampleAnswer: q.sampleAnswer ?? "",
+      })),
+    },
+    attempts,
+  })
+})
+
+/* Teacher: written answer e marks + feedback dey.
+   Shob written answer grade hole attempt "graded" hoy ar student notification pay */
+export const gradeAttempt = asyncHandler(async (req, res) => {
+  const attempt = await QuizAttempt.findById(req.params.attemptId)
+  if (!attempt) throw new ApiError(404, "Attempt not found")
+  const quiz = await Quiz.findById(attempt.quiz)
+  if (!quiz) throw new ApiError(404, "Quiz not found")
+  await loadOwnedCourse(quiz.course, req.user!)
+
+  const grades: unknown[] = Array.isArray(req.body.grades) ? req.body.grades : []
+  if (grades.length === 0) throw new ApiError(400, "No grades provided")
+
+  const written = attempt.written as any[]
+  for (const item of grades) {
+    const g = (item ?? {}) as Record<string, unknown>
+    const index = Number(g.index)
+    const entry = written.find((w) => w.index === index)
+    if (!entry) throw new ApiError(400, `Question ${index + 1} is not a written question in this attempt`)
+
+    const awarded = Number(g.awarded)
+    const max = entry.marks ?? 1
+    if (!Number.isFinite(awarded) || awarded < 0 || awarded > max) {
+      throw new ApiError(400, `Marks for question ${index + 1} must be between 0 and ${max}`)
+    }
+    entry.awarded = awarded
+    entry.feedback = String(g.feedback ?? "").trim().slice(0, 1000)
+  }
+
+  const wasPending = attempt.status === "pending"
+  const pending = written.filter((w) => w.awarded === null || w.awarded === undefined).length
+  const total = attempt.total ?? 0
+  const score = (attempt.mcqScore ?? 0) + written.reduce((n, w) => n + (w.awarded ?? 0), 0)
+  const percent = total ? Math.round((score / total) * 100) : 0
+
+  attempt.score = score
+  attempt.percent = percent
+  attempt.status = pending > 0 ? "pending" : "graded"
+  attempt.passed = attempt.status === "graded" && percent >= (quiz.passingScore ?? 50)
+  attempt.markModified("written")
+  await attempt.save()
+
+  if (wasPending && attempt.status === "graded") {
+    await notify(
+      attempt.student,
+      "Quiz graded",
+      `"${quiz.title}": ${score}/${total} (${attempt.passed ? "passed" : "not passed"})`,
+      "/student/quizzes"
+    )
+  }
+
+  res.json({ attempt })
 })

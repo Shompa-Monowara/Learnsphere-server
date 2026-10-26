@@ -21,6 +21,8 @@ const schema = z.object({
   MAIL_FROM: z.string().default("LearnSphere <no-reply@learnsphere.com>"),
   /* z.coerce.boolean() "false" string ke true dhore, tai enum + transform */
   REQUIRE_EMAIL_OTP: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  /* true hole shudhu seed-er 3 ta demo account OTP chhara login korbe (evaluator er jonno) */
+  DEMO_SKIP_OTP: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 
   // OAuth (Google / GitHub)
   API_URL: z.string().default("http://localhost:5000/api"),
@@ -28,6 +30,9 @@ const schema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().default(""),
   GITHUB_CLIENT_ID: z.string().default(""),
   GITHUB_CLIENT_SECRET: z.string().default(""),
+
+  // Stripe (test mode)
+  STRIPE_SECRET_KEY: z.string().default(""),
 })
 
 const parsed = schema.safeParse(process.env)

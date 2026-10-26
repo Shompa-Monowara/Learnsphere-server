@@ -1,9 +1,12 @@
+import Category from "../models/Category"
 import Course from "../models/Course"
 import User from "../models/User"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
-import { escapeRegex } from "../utils/helpers"
 
+const LIMIT = 8
+
+/* Public instructors page: search, category, min rating, sort, pagination */
 export const getInstructors = asyncHandler(async (req, res) => {
   const stats = await Course.aggregate([
     { $match: { status: "published" } },
@@ -13,26 +16,93 @@ export const getInstructors = asyncHandler(async (req, res) => {
         coursesCount: { $sum: 1 },
         studentsCount: { $sum: "$studentsCount" },
         rating: { $avg: "$ratingAvg" },
+        categoryIds: { $push: "$category" },
+        titles: { $push: "$title" },
       },
     },
   ])
 
-  const filter: Record<string, any> = { _id: { $in: stats.map((s) => s._id) }, isBlocked: false }
-  if (req.query.q) filter.name = { $regex: escapeRegex(String(req.query.q)), $options: "i" }
+  const catDocs = await Category.find().select("name").lean()
+  const catName = new Map<string, string>(catDocs.map((c: any) => [String(c._id), c.name]))
+  const statMap = new Map(stats.map((s) => [String(s._id), s]))
 
-  const users = await User.find(filter).select("name avatar headline bio").lean()
-  const map = new Map(stats.map((s) => [String(s._id), s]))
+  const users = await User.find({
+    _id: { $in: stats.map((s) => s._id) },
+    role: "teacher",
+    isBlocked: false,
+  })
+    .select("name avatar headline bio")
+    .lean()
+
+  const all = users.map((u) => {
+    const s = statMap.get(String(u._id))
+    const counts = new Map<string, number>()
+    for (const id of s.categoryIds) {
+      const n = catName.get(String(id))
+      if (n) counts.set(n, (counts.get(n) ?? 0) + 1)
+    }
+    const categories = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([n]) => n)
+    return {
+      _id: u._id,
+      name: u.name,
+      avatar: u.avatar,
+      headline: u.headline,
+      bio: u.bio,
+      coursesCount: s.coursesCount as number,
+      studentsCount: s.studentsCount as number,
+      rating: Number((s.rating || 0).toFixed(1)),
+      category: categories[0] ?? "",
+      categories,
+      skills: (s.titles as string[]).slice(0, 3),
+    }
+  })
+
+  /* Hero stats + category chips (filter er upor depend kore na) */
+  const catCount = new Map<string, number>()
+  all.forEach((i) => i.categories.forEach((c) => catCount.set(c, (catCount.get(c) ?? 0) + 1)))
+  const summary = {
+    instructors: all.length,
+    students: all.reduce((n, i) => n + i.studentsCount, 0),
+    avgRating: all.length ? Number((all.reduce((n, i) => n + i.rating, 0) / all.length).toFixed(1)) : 0,
+    disciplines: catCount.size,
+  }
+  const categories = [...catCount.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, count]) => ({ name, count }))
+
+  /* Filters */
+  const q = String(req.query.q ?? "").trim().toLowerCase()
+  const category = String(req.query.category ?? "")
+  const minRating = Number(req.query.minRating) || 0
+
+  let list = all.filter((i) => {
+    if (q && !`${i.name} ${i.headline} ${i.skills.join(" ")}`.toLowerCase().includes(q)) return false
+    if (category && !i.categories.includes(category)) return false
+    if (minRating && i.rating < minRating) return false
+    return true
+  })
+
+  const sorters: Record<string, (a: (typeof all)[number], b: (typeof all)[number]) => number> = {
+    top: (a, b) => b.rating - a.rating || b.studentsCount - a.studentsCount,
+    students: (a, b) => b.studentsCount - a.studentsCount,
+    courses: (a, b) => b.coursesCount - a.coursesCount,
+    name: (a, b) => a.name.localeCompare(b.name),
+  }
+  list = list.sort(sorters[String(req.query.sort)] ?? sorters.top)
+
+  /* Pagination */
+  const total = list.length
+  const pages = Math.max(1, Math.ceil(total / LIMIT))
+  const page = Math.min(Math.max(Number(req.query.page) || 1, 1), pages)
 
   res.json({
-    instructors: users.map((u) => {
-      const s = map.get(String(u._id))
-      return {
-        ...u,
-        coursesCount: s.coursesCount,
-        studentsCount: s.studentsCount,
-        rating: Number(s.rating.toFixed(1)),
-      }
-    }),
+    instructors: list.slice((page - 1) * LIMIT, page * LIMIT),
+    total,
+    page,
+    pages,
+    limit: LIMIT,
+    summary,
+    categories,
   })
 })
 

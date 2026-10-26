@@ -1,11 +1,11 @@
-import crypto from "crypto"
 import { Types } from "mongoose"
 import Course from "../models/Course"
 import Enrollment from "../models/Enrollment"
-import Transaction from "../models/Transaction"
+import QuizAttempt from "../models/QuizAttempt"
+import Submission from "../models/Submission"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
-import { isOwnerOrAdmin, issueCertificate, notify } from "../utils/helpers"
+import { countProgress, isOwnerOrAdmin, issueCertificate, notify } from "../utils/helpers"
 
 export const enroll = asyncHandler(async (req, res) => {
   const user = req.user!
@@ -16,17 +16,9 @@ export const enroll = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Already enrolled in this course")
   }
 
+  /* Paid course e direct enroll bondho. Payment age hote hobe (POST /payments/checkout/:courseId) */
   const amount = course.discountPrice ?? course.price
-  if (amount > 0) {
-    // Payment gateway (Stripe / SSLCommerz) should be verified here before continuing.
-    await Transaction.create({
-      transactionId: `TXN-${crypto.randomBytes(6).toString("hex").toUpperCase()}`,
-      user: user._id,
-      instructor: course.instructor,
-      course: course._id,
-      amount,
-    })
-  }
+  if (amount > 0) throw new ApiError(402, "This is a paid course. Please complete checkout to enroll.")
 
   const enrollment = await Enrollment.create({ student: user._id, course: course._id })
   await Course.findByIdAndUpdate(course._id, { $inc: { studentsCount: 1 } })
@@ -71,14 +63,38 @@ export const completeLesson = asyncHandler(async (req, res) => {
   const enrollment = await Enrollment.findOne({ student: user._id, course: courseId })
   if (!enrollment) throw new ApiError(403, "You are not enrolled in this course")
 
-  const exists = course.sections.some((s) => (s.lessons as any).id(lessonId))
-  if (!exists) throw new ApiError(404, "Lesson not found")
+  let lesson: any = null
+  for (const s of course.sections) {
+    lesson = (s.lessons as any).id(lessonId)
+    if (lesson) break
+  }
+  if (!lesson) throw new ApiError(404, "Lesson not found")
+
+  /* Quiz / assignment lesson e shudhu button click kore complete kora jabe na */
+  if (!enrollment.completedLessons.some((l) => String(l.lesson) === lessonId)) {
+    if (lesson.type === "quiz" && lesson.quiz) {
+      const attempts = await QuizAttempt.find({ quiz: lesson.quiz, student: user._id }).select("status passed")
+      if (attempts.length === 0) throw new ApiError(400, "Take this quiz before marking the lesson as complete")
+      if (!attempts.some((a) => a.status === "graded" && a.passed)) {
+        const waiting = attempts.some((a) => a.status === "pending")
+        throw new ApiError(
+          400,
+          waiting
+            ? "Your written answers are still waiting for the teacher to grade them"
+            : "You need to pass this quiz to complete the lesson"
+        )
+      }
+    }
+    if (lesson.type === "assignment" && lesson.assignment) {
+      const submitted = await Submission.exists({ assignment: lesson.assignment, student: user._id })
+      if (!submitted) throw new ApiError(400, "Submit this assignment before marking the lesson as complete")
+    }
+  }
 
   if (!enrollment.completedLessons.some((l) => String(l.lesson) === lessonId)) {
     enrollment.completedLessons.push({ lesson: new Types.ObjectId(lessonId), completedAt: new Date() })
   }
-  const total = course.lessonsCount || 1
-  enrollment.progress = Math.min(100, Math.round((enrollment.completedLessons.length / total) * 100))
+  enrollment.progress = countProgress(course, enrollment.completedLessons).progress
 
   let certificate = null
   if (enrollment.progress >= 100 && !enrollment.completedAt) {

@@ -4,6 +4,7 @@ import CourseModel from "../models/Course";
 import AssignmentModel from "../models/Assignment";
 import SubmissionModel from "../models/Submission";
 import EnrollmentModel from "../models/Enrollment";
+import { notify } from "../utils/helpers";
 
 type Raw = Record<string, unknown>;
 type Handler = (req: Request, res: Response) => Promise<void>;
@@ -13,6 +14,8 @@ const Course = CourseModel as unknown as Model<Raw>;
 const Assignment = AssignmentModel as unknown as Model<Raw>;
 const Submission = SubmissionModel as unknown as Model<Raw>;
 const Enrollment = EnrollmentModel as unknown as Model<Raw>;
+
+const SUBMISSION_TYPES = ["file", "text", "both"];
 
 const wrap =
   (fn: Handler): RequestHandler =>
@@ -47,6 +50,7 @@ const who = (req: Request, res: Response): { id: string; admin: boolean } | null
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const num = (v: unknown, d = 0): number =>
   typeof v === "number" && Number.isFinite(v) ? v : d;
+const bool = (v: unknown, d: boolean): boolean => (typeof v === "boolean" ? v : d);
 const iso = (v: unknown): string | null =>
   v instanceof Date ? v.toISOString() : typeof v === "string" && v ? v : null;
 const idOf = (v: unknown): string => {
@@ -86,6 +90,31 @@ const isGraded = (s: Raw): boolean => {
   return typeof s.score === "number";
 };
 
+/* Course er shob enrolled student ke notification pathay */
+const notifyStudents = async (courseId: string, assignmentTitle: string): Promise<void> => {
+  const course = (await Course.findById(courseId).select("title").lean()) as unknown as Raw | null;
+  const enrolled = (await Enrollment.find({ course: courseId }).select("student").lean()) as unknown as Raw[];
+  await Promise.all(
+    enrolled.map((e) =>
+      notify(
+        e.student,
+        "New assignment",
+        `"${assignmentTitle}" was added to "${str(course?.title)}".`,
+        "/student/assignments",
+      ),
+    ),
+  );
+};
+
+/* "PDF, .zip, Docx" -> ["pdf","zip","docx"] */
+const cleanExts = (v: unknown): string[] => {
+  const list: unknown[] = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
+  const out = list
+    .map((x) => str(x).trim().toLowerCase().replace(/^\./, ""))
+    .filter((x) => /^[a-z0-9]{1,8}$/.test(x));
+  return Array.from(new Set(out));
+};
+
 /* Create + update er shared validation */
 type Parsed =
   | {
@@ -95,6 +124,12 @@ type Parsed =
       deadline: Date;
       totalMarks: number;
       attachments: string[];
+      submissionType: string;
+      isPublished: boolean;
+      allowLate: boolean;
+      allowResubmission: boolean;
+      allowedFileTypes: string[];
+      maxFileSizeMB: number;
     }
   | { ok: false; message: string };
 
@@ -102,6 +137,7 @@ const parseAssignment = (b: Raw): Parsed => {
   const title = str(b.title).trim();
   const rawDeadline = str(b.deadline);
   const totalMarks = num(b.totalMarks, 100);
+  const maxFileSizeMB = num(b.maxFileSizeMB, 50);
 
   if (title.length < 3) return { ok: false, message: "Title must be at least 3 characters" };
 
@@ -115,6 +151,13 @@ const parseAssignment = (b: Raw): Parsed => {
   if (totalMarks < 1 || totalMarks > 1000)
     return { ok: false, message: "Total marks must be 1–1000" };
 
+  if (maxFileSizeMB < 1 || maxFileSizeMB > 100)
+    return { ok: false, message: "Max file size must be 1–100 MB" };
+
+  const submissionType = SUBMISSION_TYPES.includes(str(b.submissionType))
+    ? str(b.submissionType)
+    : "file";
+
   /* Assignment schema te attachments = [String], tai shudhu URL */
   const attachments = (Array.isArray(b.attachments) ? b.attachments : [])
     .map((x) => str((x as Raw).url))
@@ -127,6 +170,12 @@ const parseAssignment = (b: Raw): Parsed => {
     deadline,
     totalMarks,
     attachments,
+    submissionType,
+    isPublished: bool(b.isPublished, true),
+    allowLate: bool(b.allowLate, true),
+    allowResubmission: bool(b.allowResubmission, true),
+    allowedFileTypes: submissionType === "text" ? [] : cleanExts(b.allowedFileTypes),
+    maxFileSizeMB,
   };
 };
 
@@ -201,6 +250,13 @@ export const listAssignments = wrap(async (req, res) => {
         graded: s?.graded ?? 0,
         enrolled: enrolled.get(cid) ?? 0,
         closed: deadline ? new Date(deadline).getTime() < now : false,
+        /* purano assignment e ei field gulo nai, tai default dhora hocche */
+        isPublished: a.isPublished !== false,
+        submissionType: SUBMISSION_TYPES.includes(str(a.submissionType)) ? str(a.submissionType) : "file",
+        allowLate: a.allowLate !== false,
+        allowResubmission: a.allowResubmission !== false,
+        allowedFileTypes: (Array.isArray(a.allowedFileTypes) ? a.allowedFileTypes : []).map(str).filter(Boolean),
+        maxFileSizeMB: num(a.maxFileSizeMB, 50),
       };
     }),
   });
@@ -251,6 +307,7 @@ export const listSubmissions = wrap(async (req, res) => {
         fileName: f.name,
         fileUrl: f.url,
         text: str(s.text) || str(s.answer),
+        isLate: s.isLate === true,
         submittedAt: iso(s.submittedAt ?? s.createdAt),
         score: graded && typeof s.score === "number" ? s.score : null,
         feedback: str(s.feedback),
@@ -277,11 +334,19 @@ export const createAssignment = wrap(async (req, res) => {
     course: courseId,
     title: p.title,
     instructions: p.instructions,
-    deadline: p.deadline,
     dueDate: p.deadline,
     totalMarks: p.totalMarks,
     attachments: p.attachments,
+    submissionType: p.submissionType,
+    isPublished: p.isPublished,
+    allowLate: p.allowLate,
+    allowResubmission: p.allowResubmission,
+    allowedFileTypes: p.allowedFileTypes,
+    maxFileSizeMB: p.maxFileSizeMB,
   });
+
+  /* Draft hole student ke jana hobe na, publish korle jabe */
+  if (p.isPublished) await notifyStudents(courseId, p.title);
 
   res.status(201).json({ success: true, id: idOf(created) });
 });
@@ -296,8 +361,9 @@ export const updateAssignment = wrap(async (req, res) => {
 
   const asg = await Assignment.findById(id);
   if (!asg) return fail(res, 404, "Assignment not found");
-  if (!(await ownsCourse(idOf((asg as unknown as Raw).course), me.id, me.admin)))
-    return fail(res, 403, "Not your course");
+  const current = asg as unknown as Raw;
+  const courseId = idOf(current.course);
+  if (!(await ownsCourse(courseId, me.id, me.admin))) return fail(res, 403, "Not your course");
 
   const p = parseAssignment((req.body ?? {}) as Raw);
   if (!p.ok) return fail(res, 400, p.message);
@@ -307,15 +373,35 @@ export const updateAssignment = wrap(async (req, res) => {
   if (over > 0)
     return fail(res, 400, `${over} graded submission(s) already have a score above ${p.totalMarks}`);
 
+  /* Student submit korar por submission type bodlale ager submission bhenge jabe */
+  const currentType = SUBMISSION_TYPES.includes(str(current.submissionType))
+    ? str(current.submissionType)
+    : "file";
+  if (p.submissionType !== currentType) {
+    const count = await Submission.countDocuments({ assignment: id });
+    if (count > 0)
+      return fail(res, 400, "Submission type can't be changed after students have submitted");
+  }
+
+  const wasPublished = current.isPublished !== false;
+
   asg.set({
     title: p.title,
     instructions: p.instructions,
-    deadline: p.deadline,
     dueDate: p.deadline,
     totalMarks: p.totalMarks,
     attachments: p.attachments,
+    submissionType: p.submissionType,
+    isPublished: p.isPublished,
+    allowLate: p.allowLate,
+    allowResubmission: p.allowResubmission,
+    allowedFileTypes: p.allowedFileTypes,
+    maxFileSizeMB: p.maxFileSizeMB,
   });
   await asg.save();
+
+  /* Draft theke Published hole student ra notification pabe */
+  if (!wasPublished && p.isPublished) await notifyStudents(courseId, p.title);
 
   res.json({ success: true });
 });
@@ -350,7 +436,7 @@ export const gradeSubmission = wrap(async (req, res) => {
   if (!sub) return fail(res, 404, "Submission not found");
 
   const a = (await Assignment.findById((sub as unknown as Raw).assignment)
-    .select("course totalMarks")
+    .select("course totalMarks title")
     .lean()) as unknown as Raw | null;
   if (!a) return fail(res, 404, "Assignment not found");
   if (!(await ownsCourse(idOf(a.course), me.id, me.admin))) return fail(res, 403, "Not your course");
@@ -364,6 +450,13 @@ export const gradeSubmission = wrap(async (req, res) => {
 
   sub.set({ score, feedback, status: "graded", gradedAt: new Date() });
   await sub.save();
+
+  await notify(
+    (sub as unknown as Raw).student,
+    "Assignment graded",
+    `"${str(a.title)}": ${score}/${max}`,
+    "/student/assignments",
+  );
 
   res.json({ success: true, score, feedback });
 });

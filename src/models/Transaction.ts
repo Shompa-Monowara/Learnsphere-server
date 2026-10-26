@@ -9,6 +9,8 @@ const transactionSchema = new Schema(
     amount: { type: Number, required: true },
     method: { type: String, default: "manual" },
     status: { type: String, enum: ["paid", "pending", "failed", "refunded"], default: "paid" },
+    /* Stripe Checkout session id. Unique, tai ekta payment duibar record hobe na */
+    stripeSessionId: { type: String, unique: true, sparse: true },
   },
   { timestamps: true }
 )

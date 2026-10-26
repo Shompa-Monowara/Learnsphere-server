@@ -1,7 +1,7 @@
 import Plan from "../models/Plan"
 import asyncHandler from "../utils/asyncHandler"
 
-const YEARLY_DISCOUNT_PERCENT = 20
+export const YEARLY_DISCOUNT_PERCENT = 20
 
 /* Comparison table er row gulo (key = Plan.values er key) */
 const COMPARISON = [
@@ -87,7 +87,7 @@ const DEFAULT_PLANS = [
     tagline: "For solo instructors scaling up.",
     monthlyPrice: 19,
     priceNote: "/ month",
-    cta: "Start 14-day trial",
+    cta: "Get started",
     ctaTo: "/register",
     popular: true,
     order: 2,

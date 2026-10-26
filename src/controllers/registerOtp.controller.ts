@@ -1,4 +1,3 @@
-import { env } from "../config/env"
 import PendingVerification from "../models/PendingVerification"
 import User from "../models/User"
 import ApiError from "../utils/ApiError"
@@ -91,9 +90,8 @@ export const complete = asyncHandler(async (req, res) => {
   const { name, password, role, otp } = req.body
   const email = normEmail(req.body.email)
 
-  /* Fail hole karon bujhar jonno age current record ta dekhe rakhi */
+  /* Fail hole sothik error message dewar jonno age record ta dekhe rakhi */
   const snapshot = await PendingVerification.findOne({ email }).lean()
-  console.log("[otp-debug]", { email, now: new Date(), record: snapshot })
 
   /* Attempt count atomic: parallel guess diye 5 er limit paar kora jabe na */
   const pending = await PendingVerification.findOneAndUpdate(
@@ -103,20 +101,11 @@ export const complete = asyncHandler(async (req, res) => {
   )
 
   if (!pending) {
-    const reason = !snapshot ? "no_record" : snapshot.attempts >= OTP_MAX_ATTEMPTS ? "too_many_attempts" : "expired"
-    const message =
-      reason === "no_record"
-        ? "No active code found for this email. Please request a new code"
-        : reason === "too_many_attempts"
-          ? "Too many incorrect attempts. Please request a new code"
-          : "Code expired. Please request a new code"
-
-    res.status(400).json({
-      message,
-      /* debug shudhu development e dekhabe */
-      ...(env.NODE_ENV !== "production" && { debug: { reason, serverNow: new Date(), record: snapshot } }),
-    })
-    return
+    if (!snapshot) throw new ApiError(400, "No active code found for this email. Please request a new code")
+    if (snapshot.attempts >= OTP_MAX_ATTEMPTS) {
+      throw new ApiError(400, "Too many incorrect attempts. Please request a new code")
+    }
+    throw new ApiError(400, "Code expired. Please request a new code")
   }
 
   if (!otpMatches(email, otp, pending.otpHash)) {

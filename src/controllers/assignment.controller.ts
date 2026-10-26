@@ -5,6 +5,7 @@ import Submission from "../models/Submission"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
 import { ensureEnrolled, isOwnerOrAdmin, notify, pick } from "../utils/helpers"
+import { ASSIGNMENT_MAX_MB } from "../middlewares/upload"
 import { uploadBuffer } from "./upload.controller"
 
 const FIELDS = ["title", "instructions", "dueDate", "totalMarks", "attachments"]
@@ -92,6 +93,15 @@ export const submitAssignment = asyncHandler(async (req, res) => {
   if (!assignment) throw new ApiError(404, "Assignment not found")
   await ensureEnrolled(user._id, assignment.course)
   if (!req.file) throw new ApiError(400, "Please attach a file")
+
+  /* Teacher je file type / size set korse sheta-o maante hobe (global limit er bhitore) */
+  const ext = (req.file.originalname.split(".").pop() || "").toLowerCase()
+  const allowed = (assignment.allowedFileTypes ?? []).map((t) => t.toLowerCase().replace(/^\./, ""))
+  if (allowed.length > 0 && !allowed.includes(ext)) {
+    throw new ApiError(400, `This assignment accepts only: ${allowed.join(", ")}`)
+  }
+  const maxMB = Math.min(assignment.maxFileSizeMB ?? ASSIGNMENT_MAX_MB, ASSIGNMENT_MAX_MB)
+  if (req.file.size > maxMB * 1024 * 1024) throw new ApiError(400, `File must be ${maxMB} MB or smaller`)
 
   const existing = await Submission.findOne({ assignment: assignment._id, student: user._id })
   if (existing?.status === "graded") throw new ApiError(400, "This submission has already been graded")

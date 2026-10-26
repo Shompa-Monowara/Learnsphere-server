@@ -6,12 +6,13 @@ import { env } from "../config/env"
 import User from "../models/User"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
+import { sendMail } from "../utils/mailer"
 
 export const sign = (id: unknown): string =>
   jwt.sign({ id }, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN as SignOptions["expiresIn"] })
 
 export const respond = (res: Response, status: number, user: InstanceType<typeof User>) => {
-  const { password, resetToken, resetExpires, ...safe } = user.toObject()
+  const { password, resetToken, resetExpires, passwordChangedAt, ...safe } = user.toObject()
   res.status(status).json({ token: sign(user._id), user: safe })
 }
 
@@ -60,16 +61,31 @@ export const changePassword = asyncHandler(async (req, res) => {
 })
 
 export const forgotPassword = asyncHandler(async (req, res) => {
-  const email = String(req.body.email || "").toLowerCase()
+  const email = String(req.body.email || "").trim().toLowerCase()
   const user = await User.findOne({ email })
-  if (user) {
+
+  if (user && !user.isBlocked) {
     const token = crypto.randomBytes(32).toString("hex")
     user.resetToken = crypto.createHash("sha256").update(token).digest("hex")
     user.resetExpires = new Date(Date.now() + 30 * 60 * 1000)
     await user.save()
-    // TODO: send this link by email (Nodemailer / Resend). Logged for development.
-    console.log(`Password reset link: ${env.CLIENT_URL}/reset-password/${token}`)
+
+    const link = `${env.CLIENT_URL}/reset-password/${token}`
+    try {
+      await sendMail(
+        user.email,
+        "Reset your LearnSphere password",
+        `Hi ${user.name},\n\nWe received a request to reset your password. Click the link below to choose a new one (valid for 30 minutes):\n\n${link}\n\nIf you did not request this, you can safely ignore this email.`
+      )
+    } catch (err) {
+      /* Mail fail hole token bhenge dei, kintu user ke same response dei (email enumeration thekano) */
+      user.resetToken = undefined
+      user.resetExpires = undefined
+      await user.save()
+      console.error("[forgot-password] mail failed:", err)
+    }
   }
+
   res.json({ message: "If the email exists, a reset link has been sent" })
 })
 
@@ -84,6 +100,8 @@ export const resetPassword = asyncHandler(async (req, res) => {
   user.password = password
   user.resetToken = undefined
   user.resetExpires = undefined
+  /* Ei somoyer age issue howa shob token ar kaj korbe na */
+  user.passwordChangedAt = new Date()
   await user.save()
   res.json({ message: "Password has been reset" })
 })
