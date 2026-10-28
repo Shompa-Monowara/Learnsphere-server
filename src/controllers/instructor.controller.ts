@@ -1,5 +1,6 @@
 import Category from "../models/Category"
 import Course from "../models/Course"
+import Mentor from "../models/Mentor"
 import User from "../models/User"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
@@ -34,7 +35,7 @@ export const getInstructors = asyncHandler(async (req, res) => {
     .select("name avatar headline bio")
     .lean()
 
-  const all = users.map((u) => {
+  const realInstructors = users.map((u) => {
     const s = statMap.get(String(u._id))
     const counts = new Map<string, number>()
     for (const id of s.categoryIds) {
@@ -54,8 +55,28 @@ export const getInstructors = asyncHandler(async (req, res) => {
       category: categories[0] ?? "",
       categories,
       skills: (s.titles as string[]).slice(0, 3),
+      profileOnly: false,
     }
   })
+
+  /* Admin je profile gulo publish korechhe (course na thakleo dekhabe) */
+  const mentors = await Mentor.find({ isPublished: true }).lean()
+  const profiles = mentors.map((m) => ({
+    _id: m._id,
+    name: m.name,
+    avatar: m.avatar,
+    headline: m.headline,
+    bio: m.bio,
+    coursesCount: 0,
+    studentsCount: 0,
+    rating: 0,
+    category: m.category,
+    categories: m.category ? [m.category] : [],
+    skills: m.skills ?? [],
+    profileOnly: true,
+  }))
+
+  const all = [...realInstructors, ...profiles]
 
   /* Hero stats + category chips (filter er upor depend kore na) */
   const catCount = new Map<string, number>()
@@ -63,7 +84,9 @@ export const getInstructors = asyncHandler(async (req, res) => {
   const summary = {
     instructors: all.length,
     students: all.reduce((n, i) => n + i.studentsCount, 0),
-    avgRating: all.length ? Number((all.reduce((n, i) => n + i.rating, 0) / all.length).toFixed(1)) : 0,
+    avgRating: realInstructors.length
+      ? Number((realInstructors.reduce((n, i) => n + i.rating, 0) / realInstructors.length).toFixed(1))
+      : 0,
     disciplines: catCount.size,
   }
   const categories = [...catCount.entries()]
@@ -110,7 +133,14 @@ export const getInstructor = asyncHandler(async (req, res) => {
   const instructor = await User.findOne({ _id: req.params.id, role: "teacher", isBlocked: false }).select(
     "name avatar headline bio createdAt"
   )
-  if (!instructor) throw new ApiError(404, "Instructor not found")
+  if (!instructor) {
+    const profile = await Mentor.findOne({ _id: req.params.id, isPublished: true }).select(
+      "name avatar headline bio createdAt"
+    )
+    if (!profile) throw new ApiError(404, "Instructor not found")
+    res.json({ instructor: profile, courses: [], stats: { courses: 0, students: 0 } })
+    return
+  }
 
   const courses = await Course.find({ instructor: instructor._id, status: "published" })
     .select("-sections")

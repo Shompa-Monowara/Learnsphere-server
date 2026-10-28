@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "seed": "tsx src/seed.ts"
+    "seed": "tsx src/seed.ts",
+    "seed:instructors": "tsx src/seedInstructors.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
