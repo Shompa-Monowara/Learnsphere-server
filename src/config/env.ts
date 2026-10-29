@@ -33,6 +33,7 @@ const schema = z.object({
 
   // Stripe (test mode)
   STRIPE_SECRET_KEY: z.string().default(""),
+  STRIPE_WEBHOOK_SECRET: z.string().default(""),
 })
 
 const parsed = schema.safeParse(process.env)
@@ -40,6 +41,12 @@ const parsed = schema.safeParse(process.env)
 if (!parsed.success) {
   console.error("Invalid environment variables:", parsed.error.flatten().fieldErrors)
   process.exit(1)
+}
+
+if (parsed.data.NODE_ENV === "production" && parsed.data.DEMO_SKIP_OTP) {
+  console.warn(
+    "WARNING: DEMO_SKIP_OTP=true in production. Demo accounts (including admin) can log in without OTP. Turn it off after evaluation."
+  )
 }
 
 export const env = parsed.data

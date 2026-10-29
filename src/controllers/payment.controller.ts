@@ -1,4 +1,5 @@
 import crypto from "crypto"
+import type { Request, Response } from "express"
 import Stripe from "stripe"
 import { env } from "../config/env"
 import Course from "../models/Course"
@@ -55,20 +56,17 @@ export const createCheckoutSession = asyncHandler(async (req, res) => {
   res.json({ url: session.url })
 })
 
-/* POST /payments/confirm  (body: { sessionId })
-   Success page theke call hoy. Stripe ke jiggesh kore payment verify kore, tarpor enroll kore.
-   Idempotent: ekta session e jotobar call hok, ekbar-i enrollment/transaction hobe */
-export const confirmPayment = asyncHandler(async (req, res) => {
-  const user = req.user!
-  const sessionId = String(req.body.sessionId || "")
-  if (!sessionId.startsWith("cs_")) throw new ApiError(400, "Invalid payment session")
+/* Paid session theke Transaction + Enrollment toiri kore.
+   confirmPayment (success page) ar stripeWebhook duita-i eta call kore.
+   Idempotent: ekta session e jotobar call hok, ekbar-i transaction/enrollment hobe */
+async function fulfillCourseSession(session: Stripe.Checkout.Session) {
+  const courseId = session.metadata?.courseId
+  const userId = session.metadata?.userId
+  if (!courseId || !userId) throw new ApiError(400, "Invalid payment session")
 
-  const session = await requireStripe().checkout.sessions.retrieve(sessionId)
-  if (session.metadata?.userId !== String(user._id)) throw new ApiError(403, "This payment does not belong to you")
-  if (session.payment_status !== "paid") throw new ApiError(402, "Payment has not been completed")
-
-  const course = await Course.findById(session.metadata.courseId)
+  const [course, user] = await Promise.all([Course.findById(courseId), User.findById(userId)])
   if (!course) throw new ApiError(404, "Course not found")
+  if (!user) throw new ApiError(404, "User not found")
 
   try {
     await Transaction.create({
@@ -96,5 +94,58 @@ export const confirmPayment = asyncHandler(async (req, res) => {
   /* Wishlist e thakle ber kore dei */
   await User.updateOne({ _id: user._id }, { $pull: { wishlist: course._id } })
 
+  return course
+}
+
+/* POST /payments/confirm  (body: { sessionId })
+   Success page theke call hoy. Stripe ke jiggesh kore payment verify kore, tarpor enroll kore. */
+export const confirmPayment = asyncHandler(async (req, res) => {
+  const user = req.user!
+  const sessionId = String(req.body.sessionId || "")
+  if (!sessionId.startsWith("cs_")) throw new ApiError(400, "Invalid payment session")
+
+  const session = await requireStripe().checkout.sessions.retrieve(sessionId)
+  if (session.metadata?.userId !== String(user._id)) throw new ApiError(403, "This payment does not belong to you")
+  if (session.payment_status !== "paid") throw new ApiError(402, "Payment has not been completed")
+
+  const course = await fulfillCourseSession(session)
+
   res.json({ enrolled: true, courseId: String(course._id), courseTitle: course.title })
 })
+
+/* POST /payments/webhook  (Stripe theke asey, login token lage na, signature diye verify hoy)
+   User tab bondho kore dileo payment hole enrollment hoye jabe */
+export const stripeWebhook = async (req: Request, res: Response) => {
+  if (!env.STRIPE_WEBHOOK_SECRET) {
+    res.status(503).send("Webhook is not configured")
+    return
+  }
+
+  let event: Stripe.Event
+  try {
+    event = requireStripe().webhooks.constructEvent(
+      req.body,
+      String(req.headers["stripe-signature"] || ""),
+      env.STRIPE_WEBHOOK_SECRET
+    )
+  } catch {
+    res.status(400).send("Invalid signature")
+    return
+  }
+
+  if (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") {
+    const session = event.data.object as Stripe.Checkout.Session
+    /* Teacher subscription session e courseId thake na, oigulo ekhane skip */
+    if (session.payment_status === "paid" && session.metadata?.courseId) {
+      try {
+        await fulfillCourseSession(session)
+      } catch (err) {
+        console.error("Stripe webhook fulfillment failed:", err)
+        res.status(500).send("Fulfillment failed") // 500 dile Stripe nijei abar try korbe
+        return
+      }
+    }
+  }
+
+  res.json({ received: true })
+}
