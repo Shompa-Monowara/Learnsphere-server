@@ -9,7 +9,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "seed": "tsx src/seed.ts",
-    "seed:instructors": "tsx src/seedInstructors.ts"
+    "seed:instructors": "tsx src/seedInstructors.ts",
+    "seed:students": "tsx src/seedStudents.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

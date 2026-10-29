@@ -1,7 +1,9 @@
+import { isValidObjectId } from "mongoose"
 import Assignment from "../models/Assignment"
 import Course from "../models/Course"
 import Enrollment from "../models/Enrollment"
 import Quiz from "../models/Quiz"
+import User from "../models/User"
 import ApiError from "../utils/ApiError"
 import asyncHandler from "../utils/asyncHandler"
 import { countProgress, escapeRegex, isOwnerOrAdmin, issueCertificate, notifyAdmins, pick } from "../utils/helpers"
@@ -19,32 +21,66 @@ const SORTS: Record<string, string> = {
   "price-high": "-price",
 }
 
+/* Effective price = discountPrice thakle (ar price er cheye kom hole) seta, nahole price */
+const EFFECTIVE_PRICE = { $min: [{ $ifNull: ["$discountPrice", "$price"] }, "$price"] }
+
+/* Price bucket -> MongoDB condition (frontend FilterSidebar er sathe mile thakte hobe) */
+const PRICE_BUCKETS: Record<string, any> = {
+  free: { $expr: { $eq: [EFFECTIVE_PRICE, 0] } },
+  under20: { $expr: { $and: [{ $gt: [EFFECTIVE_PRICE, 0] }, { $lt: [EFFECTIVE_PRICE, 20] }] } },
+  "20to50": { $expr: { $and: [{ $gte: [EFFECTIVE_PRICE, 20] }, { $lte: [EFFECTIVE_PRICE, 50] }] } },
+  over50: { $expr: { $gt: [EFFECTIVE_PRICE, 50] } },
+}
+
+/* Duration bucket -> totalDuration (seconds) range */
+const DURATION_BUCKETS: Record<string, any> = {
+  short: { totalDuration: { $lt: 2 * 3600 } },
+  medium: { totalDuration: { $gte: 2 * 3600, $lte: 5 * 3600 } },
+  long: { totalDuration: { $gt: 5 * 3600 } },
+}
+
+const csv = (v: unknown): string[] =>
+  typeof v === "string" ? v.split(",").map((x) => x.trim()).filter(Boolean) : []
+
 export const getCourses = asyncHandler(async (req, res) => {
-  const { q, category, level, price, minRating, instructor, sort = "newest" } = req.query as Record<string, string>
+  const { q, minRating, instructor, sort = "newest" } = req.query as Record<string, string>
   const page = Math.max(parseInt(req.query.page as string) || 1, 1)
   const limit = Math.min(parseInt(req.query.limit as string) || 9, 50)
 
+  const categories = csv(req.query.category).filter((id) => isValidObjectId(id))
+  const levels = csv(req.query.level).map((l) => l.toLowerCase())
+  const prices = csv(req.query.price).filter((p) => PRICE_BUCKETS[p])
+  const durations = csv(req.query.duration).filter((d) => DURATION_BUCKETS[d])
+
   const filter: Record<string, any> = { status: "published" }
-  if (q) filter.title = { $regex: escapeRegex(q), $options: "i" }
-  if (category) filter.category = category
-  if (level) filter.level = level
-  if (instructor) filter.instructor = instructor
-  if (minRating) filter.ratingAvg = { $gte: Number(minRating) }
-  if (price === "free") filter.price = 0
-  if (price === "paid") filter.price = { $gt: 0 }
+  const and: Record<string, any>[] = []
+
+  if (q?.trim()) {
+    const rx = new RegExp(escapeRegex(q.trim()), "i")
+    /* title + short description + instructor name — sob jaygay search hobe */
+    const teachers = await User.find({ role: "teacher", name: rx }).select("_id").limit(100).lean()
+    and.push({ $or: [{ title: rx }, { shortDescription: rx }, { instructor: { $in: teachers.map((t) => t._id) } }] })
+  }
+  if (categories.length) filter.category = { $in: categories }
+  if (levels.length) filter.level = { $in: levels }
+  if (instructor && isValidObjectId(instructor)) filter.instructor = instructor
+  if (minRating && Number(minRating) > 0) filter.ratingAvg = { $gte: Number(minRating) }
+  if (prices.length) and.push({ $or: prices.map((p) => PRICE_BUCKETS[p]) })
+  if (durations.length) and.push({ $or: durations.map((d) => DURATION_BUCKETS[d]) })
+  if (and.length) filter.$and = and
 
   const [courses, total] = await Promise.all([
     Course.find(filter)
       .select("-sections")
       .populate("instructor", "name avatar")
       .populate("category", "name slug")
-      .sort(SORTS[sort] || SORTS.newest)
+      .sort(`${SORTS[sort] || SORTS.newest} _id`)
       .skip((page - 1) * limit)
       .limit(limit),
     Course.countDocuments(filter),
   ])
 
-  res.json({ courses, total, page, pages: Math.ceil(total / limit) })
+  res.json({ courses, total, page, pages: Math.max(1, Math.ceil(total / limit)) })
 })
 
 export const getCourse = asyncHandler(async (req, res) => {
@@ -85,13 +121,23 @@ export const createCourse = asyncHandler(async (req, res) => {
   res.status(201).json({ course })
 })
 
+/* Published course teacher edit korle abar admin review lagbe (admin nijer edit korle lagbe na) */
+const sendBackToReview = (course: { status: string; rejectionReason?: string | null }, role: string) => {
+  if (course.status !== "published" || role === "admin") return false
+  course.status = "pending"
+  course.rejectionReason = undefined
+  return true
+}
+
 export const updateCourse = asyncHandler(async (req, res) => {
   const course = await Course.findById(req.params.id)
   if (!course) throw new ApiError(404, "Course not found")
   if (!isOwnerOrAdmin(course, req.user!)) throw new ApiError(403, "Not your course")
   Object.assign(course, pick(req.body, FIELDS))
+  const backToReview = sendBackToReview(course, req.user!.role)
   await course.save()
-  res.json({ course })
+  if (backToReview) await notifyAdmins("Course awaiting review", `"${course.title}" was edited and needs to be approved again.`, "/admin/courses")
+  res.json({ course, sentBackToReview: backToReview })
 })
 
 export const updateCurriculum = asyncHandler(async (req, res) => {
@@ -100,7 +146,9 @@ export const updateCurriculum = asyncHandler(async (req, res) => {
   if (!isOwnerOrAdmin(course, req.user!)) throw new ApiError(403, "Not your course")
   if (!Array.isArray(req.body.sections)) throw new ApiError(400, "sections must be an array")
   course.set("sections", req.body.sections)
+  const backToReview = sendBackToReview(course, req.user!.role)
   await course.save()
+  if (backToReview) await notifyAdmins("Course awaiting review", `"${course.title}" curriculum was edited and needs to be approved again.`, "/admin/courses")
 
   // lesson delete/add hole enrolled student der progress abar hisab kore nao
   const enrollments = await Enrollment.find({ course: course._id })
@@ -117,7 +165,7 @@ export const updateCurriculum = asyncHandler(async (req, res) => {
     await e.save()
   }
 
-  res.json({ course })
+  res.json({ course, sentBackToReview: backToReview })
 })
 
 export const submitForReview = asyncHandler(async (req, res) => {
