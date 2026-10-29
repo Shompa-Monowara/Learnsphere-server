@@ -51,7 +51,7 @@ async function issueOtp(email: string) {
         $set: windowOver ? { ...fresh, ...windowFields } : fresh,
         ...(windowOver ? {} : { $inc: { sendCount: 1 } }),
       },
-      { new: true }
+      { returnDocument: "after" }
     )
     if (!updated) throw tooSoon()
   }
@@ -97,7 +97,7 @@ export const complete = asyncHandler(async (req, res) => {
   const pending = await PendingVerification.findOneAndUpdate(
     { email, attempts: { $lt: OTP_MAX_ATTEMPTS }, expiresAt: { $gt: new Date() } },
     { $inc: { attempts: 1 } },
-    { new: true }
+    { returnDocument: "after" }
   )
 
   if (!pending) {

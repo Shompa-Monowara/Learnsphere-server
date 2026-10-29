@@ -131,7 +131,7 @@ export const startQuiz = asyncHandler(async (req, res) => {
   const expired = !!session && limit > 0 && Date.now() > session.startedAt.getTime() + (limit + GRACE_SECONDS) * 1000
 
   if (!session || expired) {
-    session = await QuizStart.findOneAndUpdate(filter, { startedAt: new Date() }, { upsert: true, new: true })
+    session = await QuizStart.findOneAndUpdate(filter, { startedAt: new Date() }, { upsert: true, returnDocument: "after" })
   }
 
   const elapsed = Math.floor((Date.now() - session!.startedAt.getTime()) / 1000)

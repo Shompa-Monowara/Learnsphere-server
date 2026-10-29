@@ -68,7 +68,7 @@ const load = async () => {
   const doc = await SiteSettings.findOneAndUpdate(
     { key: "site" },
     { $setOnInsert: { key: "site" } },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
   ).lean()
   const settings: Record<string, unknown> = {}
   for (const s of SECTIONS) settings[s] = (doc as Record<string, unknown>)[s]

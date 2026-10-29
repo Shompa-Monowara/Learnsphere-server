@@ -57,12 +57,12 @@ export const toggleHelpful = asyncHandler(async (req, res) => {
     ? await Review.findOneAndUpdate(
         { _id: id, helpfulBy: me },
         { $pull: { helpfulBy: me }, $inc: { helpful: -1 } },
-        { new: true }
+        { returnDocument: "after" }
       ).select("helpful +helpfulBy")
     : await Review.findOneAndUpdate(
         { _id: id, helpfulBy: { $ne: me } },
         { $addToSet: { helpfulBy: me }, $inc: { helpful: 1 } },
-        { new: true }
+        { returnDocument: "after" }
       ).select("helpful +helpfulBy")
 
   /* updated null mane onno ekta request age-i ei kaj ta kore diyeche, tai current obostha-i pathai */
@@ -75,6 +75,8 @@ export const toggleHelpful = asyncHandler(async (req, res) => {
   })
 })
 
+/* POST /courses/:courseId/reviews : shudhu enrolled student review dite pare.
+   Ek student ek course e ekta-i review thake, abar dile update hoy */
 export const upsertReview = asyncHandler(async (req, res) => {
   const { rating, comment } = req.body
   if (!rating || rating < 1 || rating > 5) throw new ApiError(400, "Rating must be between 1 and 5")
@@ -85,7 +87,7 @@ export const upsertReview = asyncHandler(async (req, res) => {
   const review = await Review.findOneAndUpdate(
     { course: course._id, student: req.user!._id },
     { rating, comment },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
   )
   await recalc(course._id)
   await notify(course.instructor, "New review", `${req.user!.name} rated "${course.title}" ${rating}/5.`, "/teacher/reviews")

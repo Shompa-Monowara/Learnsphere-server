@@ -14,7 +14,7 @@ export const markRead = asyncHandler(async (req, res) => {
   const notification = await Notification.findOneAndUpdate(
     { _id: req.params.id, user: req.user!._id },
     { read: true },
-    { new: true }
+    { returnDocument: "after" }
   )
   if (!notification) throw new ApiError(404, "Notification not found")
   res.json({ notification })

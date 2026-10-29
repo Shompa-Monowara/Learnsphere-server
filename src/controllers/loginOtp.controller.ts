@@ -66,7 +66,7 @@ async function issueOtp(email: string, name: string, silentCooldown: boolean): P
         $set: windowOver ? { ...fresh, ...windowFields } : fresh,
         ...(windowOver ? {} : { $inc: { sendCount: 1 } }),
       },
-      { new: true }
+      { returnDocument: "after" }
     )
     if (!updated) {
       const stillValid = existing.expiresAt.getTime() > now && existing.attempts < OTP_MAX_ATTEMPTS
@@ -123,7 +123,7 @@ export const verifyLoginOtp = asyncHandler(async (req, res) => {
   const record = await LoginOtp.findOneAndUpdate(
     { email, attempts: { $lt: OTP_MAX_ATTEMPTS }, expiresAt: { $gt: new Date() } },
     { $inc: { attempts: 1 } },
-    { new: true }
+    { returnDocument: "after" }
   )
 
   if (!record) {

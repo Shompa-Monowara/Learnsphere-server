@@ -143,7 +143,7 @@ export const confirmSubscription = asyncHandler(async (req, res) => {
       currentPeriodEnd: periodEnd(sub),
       cancelAtPeriodEnd: sub.cancel_at_period_end,
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
   )
 
   if (!alreadySaved) {

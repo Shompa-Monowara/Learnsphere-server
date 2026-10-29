@@ -208,7 +208,7 @@ export const changeRole = asyncHandler(async (req, res) => {
   if (!["student", "teacher", "admin"].includes(role)) throw new ApiError(400, "Invalid role")
   if (String(req.params.id) === String(req.user!._id))
     throw new ApiError(400, "You cannot change your own role")
-  const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true })
+  const user = await User.findByIdAndUpdate(req.params.id, { role }, { returnDocument: "after" })
   if (!user) throw new ApiError(404, "User not found")
   res.json({ user })
 })
