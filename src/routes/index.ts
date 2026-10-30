@@ -11,6 +11,7 @@ import {
   verifyLoginOtpSchema,
 } from "../validations/auth.validation"
 import { contactSchema } from "../validations/contact.validation"
+import { subscribeSchema } from "../validations/newsletter.validation"
 import { blockDirectRegister } from "../middlewares/otpGate"
 
 import * as admin from "../controllers/admin.controller"
@@ -26,6 +27,7 @@ import * as dashboard from "../controllers/dashboard.controller"
 import * as enrollment from "../controllers/enrollment.controller"
 import * as instructor from "../controllers/instructor.controller"
 import * as message from "../controllers/message.controller"
+import * as newsletter from "../controllers/newsletter.controller"
 import * as notification from "../controllers/notification.controller"
 import * as oauth from "../controllers/oauth.controller"
 import * as quiz from "../controllers/quiz.controller"
@@ -45,6 +47,7 @@ import {
   updateSiteSettings,
 } from "../controllers/siteSettings.controller"
 import { getPricing } from "../controllers/pricing.controller"
+import { getPublicStats } from "../controllers/publicStats.controller"
 import { getAbout } from "../controllers/about.controller"
 import * as payment from "../controllers/payment.controller"
 import * as subscription from "../controllers/subscription.controller"
@@ -65,6 +68,12 @@ const contactLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 10,
   message: { message: "Too many messages. Please try again later." },
+})
+
+const newsletterLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  message: { message: "Too many attempts. Please try again later." },
 })
 
 /* Auth */
@@ -97,6 +106,13 @@ router.get("/pricing", getPricing)
 router.get("/features", getFeatures)
 /* About page content (public) */
 router.get("/about", getAbout)
+
+/* Home page stats (public, real counts) */
+router.get("/stats/public", getPublicStats)
+
+/* Newsletter (public) */
+router.post("/newsletter/subscribe", newsletterLimiter, validate(subscribeSchema), newsletter.subscribe)
+router.post("/newsletter/unsubscribe/:token", newsletterLimiter, newsletter.unsubscribe)
 
 /* Contact (public) */
 router.get("/contact/info", contact.getContactInfo)
@@ -212,6 +228,7 @@ router.get("/admin/payments", adminOnly, getPayments)
 router.get("/admin/reports", adminOnly, getReports)
 router.get("/admin/site-settings", adminOnly, getSiteSettings)
 router.put("/admin/site-settings", adminOnly, updateSiteSettings)
+router.get("/admin/newsletter/subscribers", adminOnly, newsletter.getSubscribers)
 router.get("/admin/contact-messages", adminOnly, contact.getContactMessages)
 router.patch("/admin/contact-messages/:id/status", adminOnly, contact.updateContactStatus)
 router.delete("/admin/contact-messages/:id", adminOnly, contact.deleteContactMessage)
