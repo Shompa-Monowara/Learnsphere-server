@@ -43,7 +43,11 @@ export const getCourseAssignments = asyncHandler(async (req, res) => {
 
 export const getMyAssignments = asyncHandler(async (req, res) => {
   const enrollments = await Enrollment.find({ student: req.user!._id }).select("course")
-  const assignments = await Assignment.find({ course: { $in: enrollments.map((e) => e.course) } })
+  /* Draft (unpublished) assignment student ke dekhano jabe na */
+  const assignments = await Assignment.find({
+    course: { $in: enrollments.map((e) => e.course) },
+    isPublished: { $ne: false },
+  })
     .populate("course", "title")
     .sort("dueDate")
   const submissions = await Submission.find({
@@ -87,43 +91,82 @@ export const deleteAssignment = asyncHandler(async (req, res) => {
   res.json({ message: "Assignment deleted" })
 })
 
+const MAX_TEXT_LENGTH = 10000
+
 export const submitAssignment = asyncHandler(async (req, res) => {
   const user = req.user!
   const assignment = await Assignment.findById(req.params.id)
-  if (!assignment) throw new ApiError(404, "Assignment not found")
+  if (!assignment || assignment.isPublished === false) throw new ApiError(404, "Assignment not found")
   await ensureEnrolled(user._id, assignment.course)
-  if (!req.file) throw new ApiError(400, "Please attach a file")
 
-  /* Teacher je file type / size set korse sheta-o maante hobe (global limit er bhitore) */
-  const ext = (req.file.originalname.split(".").pop() || "").toLowerCase()
-  const allowed = (assignment.allowedFileTypes ?? []).map((t) => t.toLowerCase().replace(/^\./, ""))
-  if (allowed.length > 0 && !allowed.includes(ext)) {
-    throw new ApiError(400, `This assignment accepts only: ${allowed.join(", ")}`)
-  }
-  const maxMB = Math.min(assignment.maxFileSizeMB ?? ASSIGNMENT_MAX_MB, ASSIGNMENT_MAX_MB)
-  if (req.file.size > maxMB * 1024 * 1024) throw new ApiError(400, `File must be ${maxMB} MB or smaller`)
+  const type = assignment.submissionType ?? "file"
+  const needsFile = type === "file" || type === "both"
+  const needsText = type === "text" || type === "both"
 
   const existing = await Submission.findOne({ assignment: assignment._id, student: user._id })
   if (existing?.status === "graded") throw new ApiError(400, "This submission has already been graded")
+  if (existing && assignment.allowResubmission === false) {
+    throw new ApiError(400, "Resubmission is not allowed for this assignment")
+  }
 
-  const uploaded = await uploadBuffer(req.file.buffer, "submissions")
-  const isLate = new Date() > assignment.dueDate
+  const now = new Date()
+  const isLate = now > assignment.dueDate
+  if (isLate && assignment.allowLate === false) {
+    throw new ApiError(400, "The deadline has passed and late submissions are not accepted")
+  }
+
+  /* Text-only assignment e file pathale ignore kori */
+  const file = needsFile ? req.file : undefined
+  const text = String(req.body.text ?? "").trim()
+  const note = String(req.body.note ?? "").trim()
+
+  if (needsFile && !file && !existing?.fileUrl) throw new ApiError(400, "Please attach a file")
+  if (needsText && !text) throw new ApiError(400, "Please write your answer")
+  if (text.length > MAX_TEXT_LENGTH) throw new ApiError(400, `Answer must be ${MAX_TEXT_LENGTH} characters or fewer`)
+
+  let fileUrl = existing?.fileUrl ?? ""
+  let fileName = existing?.fileName ?? ""
+
+  if (file) {
+    /* Teacher je file type / size set korse sheta-o maante hobe (global limit er bhitore) */
+    const ext = (file.originalname.split(".").pop() || "").toLowerCase()
+    const allowed = (assignment.allowedFileTypes ?? []).map((t) => t.toLowerCase().replace(/^\./, ""))
+    if (allowed.length > 0 && !allowed.includes(ext)) {
+      throw new ApiError(400, `This assignment accepts only: ${allowed.join(", ")}`)
+    }
+    const maxMB = Math.min(assignment.maxFileSizeMB ?? ASSIGNMENT_MAX_MB, ASSIGNMENT_MAX_MB)
+    if (file.size > maxMB * 1024 * 1024) throw new ApiError(400, `File must be ${maxMB} MB or smaller`)
+
+    const uploaded = await uploadBuffer(file.buffer, "submissions")
+    fileUrl = uploaded.secure_url
+    fileName = file.originalname
+  }
 
   let submission: any
   if (existing) {
-    existing.history.push({ fileUrl: existing.fileUrl, submittedAt: (existing as any).updatedAt })
-    existing.fileUrl = uploaded.secure_url
-    existing.note = req.body.note || ""
+    existing.history.push({
+      fileUrl: existing.fileUrl,
+      text: existing.text,
+      submittedAt: existing.submittedAt ?? (existing as any).updatedAt,
+    })
+    existing.fileUrl = fileUrl
+    existing.fileName = fileName
+    existing.text = needsText ? text : ""
+    existing.note = note
     existing.isLate = isLate
+    existing.submittedAt = now
     submission = await existing.save()
   } else {
     submission = await Submission.create({
       assignment: assignment._id,
       course: assignment.course,
       student: user._id,
-      fileUrl: uploaded.secure_url,
-      note: req.body.note || "",
+      fileUrl,
+      fileName,
+      text: needsText ? text : "",
+      note,
       isLate,
+      submittedAt: now,
     })
   }
 
@@ -131,7 +174,7 @@ export const submitAssignment = asyncHandler(async (req, res) => {
   if (course) {
     await notify(course.instructor, "New submission", `${user.name} submitted "${assignment.title}".`, "/teacher/assignments")
   }
-  res.status(201).json({ submission })
+  res.status(existing ? 200 : 201).json({ submission })
 })
 
 export const getSubmissions = asyncHandler(async (req, res) => {
